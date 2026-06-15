@@ -1,5 +1,1 @@
 # KavkazskiePlenniki
-
-Test Dron
-
-Кек
