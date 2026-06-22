@@ -41,6 +41,8 @@ class Product(Base):
     images: Mapped[list["ProductImage"]] = relationship(back_populates="product", cascade="all, delete-orphan")
     characteristics: Mapped[list["Characteristic"]] = relationship(back_populates="product", cascade="all, delete-orphan")
     skus: Mapped[list["SKU"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+    blocking_reason: Mapped["BlockingReason | None"] = relationship(back_populates="product", uselist=False, cascade="all, delete-orphan")
+    field_reports: Mapped[list["FieldReport"]] = relationship(back_populates="product", cascade="all, delete-orphan")
 
 
 class ProductImage(Base):
@@ -86,3 +88,26 @@ class SKU(Base):
 
     product: Mapped["Product"] = relationship(back_populates="skus")
     characteristics: Mapped[list["Characteristic"]] = relationship(back_populates="sku")
+
+
+class BlockingReason(Base):
+    __tablename__ = "blocking_reasons"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    product: Mapped["Product"] = relationship(back_populates="blocking_reason")
+
+
+class FieldReport(Base):
+    __tablename__ = "field_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    field_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    sku_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    product: Mapped["Product"] = relationship(back_populates="field_reports")

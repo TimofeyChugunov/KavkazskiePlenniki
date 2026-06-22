@@ -123,3 +123,50 @@ class SKUUpdate(BaseModel):
     discount: int | None = Field(default=None, ge=0)
     image: str | None = Field(default=None, min_length=1, max_length=500)
     characteristics: list[CharacteristicCreate] | None = None
+
+
+class BlockingReasonResponse(BaseModel):
+    id: str
+    title: str
+    comment: str
+
+    model_config = {"from_attributes": True}
+
+
+class FieldReportResponse(BaseModel):
+    field_name: str
+    sku_id: str | None = None
+    comment: str
+
+    model_config = {"from_attributes": True}
+
+
+class SKUDetailResponse(BaseModel):
+    id: str
+    name: str
+    price: int
+    cost_price: int | None = None
+    discount: int
+    image: str | None = None
+    active_quantity: int
+    reserved_quantity: int
+    characteristics: list[CharacteristicResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class ProductDetailResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    status: str
+    deleted: bool
+    blocked: bool
+    category: CategoryRef
+    images: list[ImageResponse]
+    characteristics: list[CharacteristicResponse]
+    skus: list[SKUDetailResponse]
+    blocking_reason: BlockingReasonResponse | None = None
+    field_reports: list[FieldReportResponse] = []
+
+    model_config = {"from_attributes": True}

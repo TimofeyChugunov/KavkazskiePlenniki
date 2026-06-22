@@ -225,7 +225,11 @@ async def test_delete_nonexistent_product_returns_404(
 
 
 @pytest.mark.asyncio
+@patch("app.routers.products.send_moderation_event", new_callable=AsyncMock)
+@patch("app.routers.products.send_b2c_product_deleted", new_callable=AsyncMock)
 async def test_deleted_product_not_in_seller_list(
+    mock_b2c: AsyncMock,
+    mock_mod: AsyncMock,
     client: AsyncClient,
     product_with_skus: Product,
     seller_auth: dict,
