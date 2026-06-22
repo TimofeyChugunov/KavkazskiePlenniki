@@ -382,7 +382,20 @@ paths:
       operationId: deleteProduct
       security: [{ HTTPBearer: [] }]
       responses:
-        "204": { description: Помечен удалённым }
+        "200":
+          description: Помечен удалённым
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+        "400":
+          description: Товар уже удалён
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
