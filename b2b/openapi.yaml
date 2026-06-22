@@ -996,13 +996,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/InventoryOrderResponse" }
 
-  /api/v1/inventory/fulfill:
+  /api/v1/fulfill:
     post:
-      tags: [Inventory]
+      tags: [Fulfill]
       summary: |
         Списание резерва при доставке (вызывается B2C admin при переходе заказа
-        в DELIVERED). Уменьшает reserved_quantity и stock_quantity.
-      operationId: fulfillInventory
+        в DELIVERED). Уменьшает reserved_quantity. active_quantity не меняется.
+        Идемпотентность по order_id.
+      operationId: fulfillDelivery
       parameters:
         - {
             name: X-Service-Key,
@@ -1014,13 +1015,20 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/InventoryOrderRequest" }
+            schema: { $ref: "#/components/schemas/FulfillRequest" }
       responses:
         "200":
           description: Списано
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/InventoryOrderResponse" }
+              schema: { $ref: "#/components/schemas/FulfillResponse" }
+        "400":
+          description: Недостаточно зарезервированного количества
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ───────────────────── MODERATION EVENTS ─────────────────────
   /api/v1/events/moderation:
@@ -1752,6 +1760,30 @@ components:
         order_id: { type: string, format: uuid }
         status: { type: string, enum: [UNRESERVED, FULFILLED] }
         processed_at: { type: string, format: date-time }
+
+    # ─── Fulfill (списание резерва при доставке) ───
+    FulfillRequest:
+      type: object
+      required: [order_id, items]
+      properties:
+        order_id: { type: string, format: uuid, description: ID заказа (для идемпотентности) }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FulfillItem" }
+
+    FulfillItem:
+      type: object
+      required: [sku_id, quantity]
+      properties:
+        sku_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, description: Количество для списания }
+
+    FulfillResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, default: true }
 
     # ─── Moderation events (приём от Moderation Service) ───
     ModerationEventType:

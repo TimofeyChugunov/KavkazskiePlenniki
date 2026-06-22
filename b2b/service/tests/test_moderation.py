@@ -211,7 +211,9 @@ async def test_blocked_hard_sets_terminal_status(
 
 
 @pytest.mark.asyncio
+@patch("app.routers.moderation.send_b2c_product_blocked", new_callable=AsyncMock)
 async def test_hard_blocked_product_rejects_seller_edits(
+    mock_b2c: AsyncMock,
     client: AsyncClient,
     product_on_moderation: Product,
     mod_service_key: dict,
