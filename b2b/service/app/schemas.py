@@ -81,3 +81,28 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     details: dict | None = None
+
+
+class SKUCreate(BaseModel):
+    product_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    name: str = Field(..., min_length=1, max_length=255)
+    price: int = Field(..., gt=0)
+    cost_price: int = Field(..., gt=0)
+    discount: int = Field(default=0, ge=0)
+    image: str = Field(..., min_length=1, max_length=500)
+    characteristics: list[CharacteristicCreate] = Field(default_factory=list)
+
+
+class SKUCreateResponse(BaseModel):
+    id: str
+    product_id: str
+    name: str
+    price: int
+    cost_price: int
+    discount: int
+    image: str
+    active_quantity: int
+    reserved_quantity: int
+    characteristics: list[CharacteristicResponse]
+
+    model_config = {"from_attributes": True}
