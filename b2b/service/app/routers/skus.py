@@ -10,7 +10,7 @@ from ..auth import get_current_user
 from ..config import settings
 from ..database import get_db
 from ..models import Characteristic, Product, SKU
-from ..schemas import ErrorResponse, SKUCreate, SKUCreateResponse
+from ..schemas import ErrorResponse, SKUCreate, SKUCreateResponse, SKUUpdate
 
 router = APIRouter(prefix="/api/v1/skus", tags=["SKUs"])
 
@@ -104,6 +104,107 @@ async def create_sku(
     elif product.status in ("MODERATED", "BLOCKED"):
         product.status = "ON_MODERATION"
         event_to_send = "EDITED"
+
+    await db.commit()
+    await db.refresh(sku)
+
+    if event_to_send:
+        await send_moderation_event(
+            product_id=product.id,
+            seller_id=seller_id,
+            event=event_to_send,
+        )
+
+    chars = (
+        await db.execute(select(Characteristic).where(Characteristic.sku_id == sku.id))
+    ).scalars().all()
+
+    return SKUCreateResponse(
+        id=sku.id,
+        product_id=sku.product_id,
+        name=sku.name,
+        price=sku.price,
+        cost_price=sku.cost_price,
+        discount=sku.discount,
+        image=sku.image,
+        active_quantity=sku.active_quantity,
+        reserved_quantity=sku.reserved_quantity,
+        characteristics=[{"name": c.name, "value": c.value} for c in chars],
+    )
+
+
+@router.put(
+    "/{sku_id}",
+    response_model=SKUCreateResponse,
+    status_code=status.HTTP_200_OK,
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
+)
+async def update_sku(
+    sku_id: str,
+    body: SKUUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    seller_id = current_user.get("sub")
+    if not seller_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "Invalid token"},
+        )
+
+    sku = await db.get(SKU, sku_id)
+    if not sku:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "SKU not found"},
+        )
+
+    product = await db.get(Product, sku.product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    if product.seller_id != seller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_OWNER", "message": "Product does not belong to the authenticated seller"},
+        )
+
+    if product.status == "HARD_BLOCKED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot edit hard-blocked product"},
+        )
+
+    if body.name is not None:
+        sku.name = body.name
+    if body.price is not None:
+        sku.price = body.price
+    if body.cost_price is not None:
+        sku.cost_price = body.cost_price
+    if body.discount is not None:
+        sku.discount = body.discount
+    if body.image is not None:
+        sku.image = body.image
+
+    event_to_send = None
+    if product.status in ("MODERATED", "BLOCKED"):
+        product.status = "ON_MODERATION"
+        event_to_send = "EDITED"
+
+    if body.characteristics is not None:
+        old_chars = (await db.execute(select(Characteristic).where(Characteristic.sku_id == sku.id))).scalars().all()
+        for char in old_chars:
+            await db.delete(char)
+        for char in body.characteristics:
+            db.add(Characteristic(sku_id=sku.id, name=char.name, value=char.value))
 
     await db.commit()
     await db.refresh(sku)
