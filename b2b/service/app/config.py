@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     B2B_TO_MOD_KEY: str = "dev-b2b-to-mod-key"
     B2C_URL: str = "http://b2c:8000"
     B2B_TO_B2C_KEY: str = "dev-b2b-to-b2c-key"
+    B2C_TO_B2B_KEY: str = "dev-b2c-to-b2b-key"
 
     model_config = {"env_prefix": "B2B_"}
 
