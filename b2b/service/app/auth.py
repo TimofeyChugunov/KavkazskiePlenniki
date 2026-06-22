@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from .config import settings
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -28,4 +29,10 @@ def decode_token(token: str) -> dict:
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    return decode_token(credentials.credentials)
+
+
+async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(optional_security)) -> dict | None:
+    if not credentials:
+        return None
     return decode_token(credentials.credentials)

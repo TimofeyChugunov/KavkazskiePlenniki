@@ -3,16 +3,16 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..auth import get_current_user
+from ..auth import get_current_user, get_optional_user
 from ..config import settings
 from ..database import get_db
-from ..models import Category, Characteristic, Product, ProductImage, SKU
+from ..models import BlockingReason, Category, Characteristic, FieldReport, Product, ProductImage, SKU
 from .skus import send_moderation_event
-from ..schemas import ErrorResponse, ProductCreate, ProductResponse, ProductUpdate
+from ..schemas import ErrorResponse, ProductCreate, ProductDetailResponse, ProductResponse, ProductUpdate
 
 router = APIRouter(prefix="/api/v1/products", tags=["Products"])
 
@@ -88,6 +88,113 @@ async def list_my_products(
         "total_count": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.get(
+    "/{product_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OK"},
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
+)
+async def get_product(
+    product_id: str,
+    request: Request,
+    x_service_key: str | None = Header(default=None),
+    current_user: dict | None = Depends(get_optional_user),
+    db: AsyncSession = Depends(get_db),
+):
+    is_service_call = x_service_key and x_service_key == settings.B2B_TO_MOD_KEY
+
+    if not is_service_call and not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "Invalid token"},
+        )
+
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    if not is_service_call:
+        seller_id = current_user.get("sub")
+        if not seller_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Invalid token"},
+            )
+        if product.seller_id != seller_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "Product not found"},
+            )
+
+    category = await db.get(Category, product.category_id)
+    images = (await db.execute(select(ProductImage).where(ProductImage.product_id == product.id))).scalars().all()
+    chars = (await db.execute(select(Characteristic).where(Characteristic.product_id == product.id))).scalars().all()
+    skus = (await db.execute(select(SKU).where(SKU.product_id == product.id))).scalars().all()
+
+    sku_chars = {}
+    sku_ids = [sku.id for sku in skus]
+    if sku_ids:
+        all_sku_chars = (await db.execute(select(Characteristic).where(Characteristic.sku_id.in_(sku_ids)))).scalars().all()
+        for char in all_sku_chars:
+            if char.sku_id:
+                if char.sku_id not in sku_chars:
+                    sku_chars[char.sku_id] = []
+                sku_chars[char.sku_id].append({"name": char.name, "value": char.value})
+
+    skus_data = []
+    for sku in skus:
+        skus_data.append({
+            "id": sku.id,
+            "name": sku.name,
+            "price": sku.price,
+            "cost_price": sku.cost_price if not is_service_call else None,
+            "discount": sku.discount,
+            "image": sku.image,
+            "active_quantity": sku.active_quantity,
+            "reserved_quantity": sku.reserved_quantity if not is_service_call else None,
+            "characteristics": sku_chars.get(sku.id, []),
+        })
+
+    blocking_reason_data = None
+    blocking_reason = (await db.execute(select(BlockingReason).where(BlockingReason.product_id == product.id))).scalars().first()
+    if blocking_reason:
+        blocking_reason_data = {
+            "id": blocking_reason.id,
+            "title": blocking_reason.title,
+            "comment": blocking_reason.comment,
+        }
+
+    field_reports_data = []
+    for fr in (await db.execute(select(FieldReport).where(FieldReport.product_id == product.id))).scalars().all():
+        field_reports_data.append({
+            "field_name": fr.field_name,
+            "sku_id": fr.sku_id,
+            "comment": fr.comment,
+        })
+
+    return {
+        "id": product.id,
+        "title": product.title,
+        "description": product.description,
+        "status": product.status,
+        "deleted": product.deleted,
+        "blocked": product.blocked,
+        "category": {"id": category.id, "name": category.name},
+        "images": [{"url": i.url, "ordering": i.ordering} for i in sorted(images, key=lambda x: x.ordering)],
+        "characteristics": [{"name": c.name, "value": c.value} for c in chars if not c.sku_id],
+        "skus": skus_data,
+        "blocking_reason": blocking_reason_data,
+        "field_reports": field_reports_data,
     }
 
 
