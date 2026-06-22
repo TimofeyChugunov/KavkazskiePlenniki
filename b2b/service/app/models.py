@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -136,3 +136,11 @@ class InvoiceItem(Base):
 
     invoice: Mapped["Invoice"] = relationship(back_populates="items")
     sku: Mapped["SKU"] = relationship()
+
+
+class ReserveOperation(Base):
+    __tablename__ = "reserve_operations"
+
+    idempotency_key: Mapped[str] = mapped_column(String(36), primary_key=True)
+    result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
