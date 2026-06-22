@@ -1,10 +1,11 @@
 import re
 import uuid
 from datetime import datetime, timezone
+from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user, get_optional_user
@@ -35,8 +36,9 @@ def slugify(title: str) -> str:
 async def list_my_products(
     limit: int = 20,
     offset: int = 0,
-    status_filter: str | None = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
     include_deleted: bool = False,
+    search: str | None = None,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -55,32 +57,75 @@ async def list_my_products(
     if status_filter:
         query = query.where(Product.status == status_filter)
 
-    query = query.order_by(Product.created_at.desc()).limit(limit).offset(offset)
+    if search:
+        query = query.where(Product.title.ilike(f"%{search}%"))
 
-    result = await db.execute(query)
-    products = result.scalars().all()
-
-    count_query = select(Product).where(Product.seller_id == seller_id)
+    count_query = select(func.count()).select_from(Product).where(Product.seller_id == seller_id)
     if not include_deleted:
         count_query = count_query.where(Product.deleted == False)
     if status_filter:
         count_query = count_query.where(Product.status == status_filter)
+    if search:
+        count_query = count_query.where(Product.title.ilike(f"%{search}%"))
 
-    from sqlalchemy import func
-    total = (await db.execute(select(func.count()).select_from(count_query.subquery()))).scalar() or 0
+    total = (await db.execute(count_query)).scalar() or 0
+
+    query = query.order_by(Product.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(query)
+    products = result.scalars().all()
+
+    product_ids = [p.id for p in products]
+
+    skus_count_map = {}
+    total_active_map = {}
+    if product_ids:
+        skus_count_rows = (await db.execute(
+            select(SKU.product_id, func.count(SKU.id))
+            .where(SKU.product_id.in_(product_ids))
+            .group_by(SKU.product_id)
+        )).all()
+        for row in skus_count_rows:
+            skus_count_map[row[0]] = row[1]
+
+        active_rows = (await db.execute(
+            select(SKU.product_id, func.coalesce(func.sum(SKU.active_quantity), 0))
+            .where(SKU.product_id.in_(product_ids))
+            .group_by(SKU.product_id)
+        )).all()
+        for row in active_rows:
+            total_active_map[row[0]] = row[1]
+
+    categories = {}
+    if product_ids:
+        category_ids = list({p.category_id for p in products})
+        cat_rows = (await db.execute(
+            select(Category).where(Category.id.in_(category_ids))
+        )).scalars().all()
+        categories = {c.id: c for c in cat_rows}
+
+    images_map = {}
+    if product_ids:
+        img_rows = (await db.execute(
+            select(ProductImage).where(ProductImage.product_id.in_(product_ids))
+        )).scalars().all()
+        for img in img_rows:
+            if img.product_id not in images_map:
+                images_map[img.product_id] = []
+            images_map[img.product_id].append(img)
 
     items = []
     for p in products:
+        cat = categories.get(p.category_id)
+        product_images = sorted(images_map.get(p.id, []), key=lambda x: x.ordering)
         items.append({
             "id": p.id,
             "title": p.title,
-            "slug": p.slug,
             "status": p.status,
-            "category_id": p.category_id,
-            "deleted": p.deleted,
+            "category": {"id": cat.id, "name": cat.name} if cat else None,
+            "images": [{"url": i.url, "ordering": i.ordering} for i in product_images],
+            "skus_count": skus_count_map.get(p.id, 0),
+            "total_active_quantity": total_active_map.get(p.id, 0),
             "created_at": p.created_at,
-            "min_price": None,
-            "cover_image": None,
         })
 
     return {

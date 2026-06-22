@@ -286,6 +286,8 @@ paths:
     get:
       tags: [Products]
       summary: Список своих товаров (для продавца)
+      description: |
+        seller_id определяется автоматически из JWT. Query-параметр seller_id игнорируется.
       operationId: listMyProducts
       security: [{ HTTPBearer: [] }]
       parameters:
@@ -305,12 +307,17 @@ paths:
         - name: include_deleted
           in: query
           schema: { type: boolean, default: false }
+        - name: search
+          in: query
+          schema: { type: string }
+          description: Поиск по названию (егистронезависимый)
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProductPaginatedResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       tags: [Products]
       summary: Создать товар (без SKU → статус CREATED, на модерацию НЕ идёт)
@@ -1394,22 +1401,27 @@ components:
 
     ProductShortResponse:
       type: object
-      required: [id, title, slug, status, category_id, deleted, created_at]
+      required: [id, title, status, category, images, skus_count, total_active_quantity, created_at]
       properties:
         id: { type: string, format: uuid }
         title: { type: string }
-        slug: { type: string }
         status: { $ref: "#/components/schemas/ProductStatus" }
-        category_id: { type: string, format: uuid }
-        deleted: { type: boolean }
+        category:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+        images:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              ordering: { type: integer }
+        skus_count: { type: integer, description: Количество SKU у товара }
+        total_active_quantity: { type: integer, description: Суммарный active_quantity по всем SKU }
         created_at: { type: string, format: date-time }
-        min_price:
-          {
-            type: integer,
-            nullable: true,
-            description: Минимальная цена SKU в копейках,
-          }
-        cover_image: { type: string, nullable: true }
 
     ProductPublicShortResponse:
       type: object
