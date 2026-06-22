@@ -200,3 +200,50 @@ class InvoiceResponse(BaseModel):
     items: list[InvoiceItemResponse]
 
     model_config = {"from_attributes": True}
+
+
+class InventoryItem(BaseModel):
+    sku_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    quantity: int = Field(..., gt=0)
+
+
+class ReserveRequest(BaseModel):
+    idempotency_key: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    items: list[InventoryItem] = Field(..., min_length=1)
+
+
+class ReserveSuccessItem(BaseModel):
+    sku_id: str
+    reserved_quantity: int
+    remaining_stock: int
+
+
+class ReserveSuccessResponse(BaseModel):
+    reserved: bool = True
+    items: list[ReserveSuccessItem]
+
+
+class ReserveFailedItem(BaseModel):
+    sku_id: str
+    requested: int
+    available: int
+    reason: str
+
+
+class ReserveFailResponse(BaseModel):
+    reserved: bool = False
+    failed_items: list[ReserveFailedItem]
+
+
+class UnreserveItem(BaseModel):
+    sku_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    quantity: int = Field(..., gt=0)
+
+
+class UnreserveRequest(BaseModel):
+    order_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    items: list[UnreserveItem] = Field(..., min_length=1)
+
+
+class UnreserveResponse(BaseModel):
+    ok: bool = True
