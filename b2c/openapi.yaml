@@ -654,21 +654,12 @@ paths:
       summary: Создать заказ (чекаут)
       description: |
         Алгоритм:
-        1. Валидация корзины и адреса.
-        2. Резерв SKU в B2B (с тем же idempotency_key).
-        3. Мок-оплата → статус сразу PAID.
-        4. Цены в OrderItem фиксируются на момент создания.
-
-        Заголовок Idempotency-Key обязателен. TTL ключа — 1 час.
-        Повторный запрос с тем же ключом и тем же телом вернёт уже созданный заказ.
-        При несовпадении тела — 409.
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema:
-            type: string
-            format: uuid
+        1. Идемпотентность: повторный запрос с тем же idempotency_key → существующий заказ.
+        2. Валидация items (не пустой, qty > 0).
+        3. Получение товаров из B2B, проверка статуса и остатков.
+        4. Резерв SKU в B2B (all-or-nothing, с тем же idempotency_key).
+        5. Мок-оплата → статус сразу PAID.
+        6. Цены в OrderItem фиксируются на момент создания.
       requestBody:
         required: true
         content:
@@ -684,16 +675,20 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409":
           description: |
-            Конфликт: либо несовпадение тела с уже использованным idempotency_key,
-            либо не удалось зарезервировать остатки.
+            Конфликт: не удалось зарезервировать остатки (all-or-nothing).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderReserveFailedResponse" }
+        "422":
+          description: Невалидное количество (quantity < 1)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-        "422":
-          description: Корзина невалидна (см. /cart/validate)
+        "503":
+          description: B2B сервис недоступен
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/CartValidationResponse" }
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/orders/{order_id}:
     parameters:
@@ -1283,85 +1278,93 @@ components:
     # -------- Заказы --------
     OrderCreateRequest:
       type: object
-      required: [address_id, payment_method_id]
+      required: [idempotency_key, items]
       properties:
-        address_id: { type: string, format: uuid }
-        payment_method_id: { type: string, format: uuid }
-        comment:
+        idempotency_key:
           type: string
-          maxLength: 1000
-        items_snapshot:
+          description: Защита от повторного checkout (TTL 1 час)
+        items:
           type: array
-          description: |
-            Опционально: явный снапшот корзины {sku_id, quantity, unit_price}
-            для защиты от гонок. Если передан — сервер проверит соответствие
-            текущей корзине и при расхождении вернёт 422.
-          items:
-            type: object
-            required: [sku_id, quantity, unit_price]
-            properties:
-              sku_id: { type: string, format: uuid }
-              quantity: { type: integer, minimum: 1 }
-              unit_price: { type: integer, minimum: 0 }
+          minItems: 1
+          items: { $ref: "#/components/schemas/OrderItemCreate" }
+        delivery_address:
+          type: string
+          description: Адрес доставки (mock, не влияет на логику)
+          nullable: true
+
+    OrderItemCreate:
+      type: object
+      required: [sku_id, quantity]
+      properties:
+        sku_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
 
     OrderItem:
       type: object
-      required: [sku_id, product_id, name, quantity, unit_price, line_total]
+      required:
+        [id, sku_id, product_id, product_title, sku_name, quantity, unit_price, line_total]
       properties:
+        id: { type: string, format: uuid }
         sku_id: { type: string, format: uuid }
         product_id: { type: string, format: uuid }
-        name: { type: string }
-        sku_code: { type: string }
+        product_title: { type: string, description: Название товара на момент покупки }
+        sku_name: { type: string, description: Название SKU на момент покупки }
         quantity: { type: integer, minimum: 1 }
         unit_price:
           type: integer
-          description: Цена за единицу, зафиксированная при создании заказа
-        line_total: { type: integer }
-        image_url: { type: string, format: uri, nullable: true }
+          description: Цена за единицу, зафиксированная при создании заказа (копейки)
+        line_total:
+          type: integer
+          description: unit_price * quantity (копейки)
 
     OrderResponse:
       type: object
       required:
-        [id, buyer_id, status, items, subtotal, total, address, created_at]
+        [id, status, items, total_amount, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
-        number:
-          type: string
-          description: Человекочитаемый номер заказа, например NM-2026-000123
-        buyer_id: { type: string, format: uuid }
         status:
           type: string
-          enum:
-            [
-              CREATED,
-              PAID,
-              ASSEMBLING,
-              DELIVERING,
-              DELIVERED,
-              CANCELLED,
-              CANCEL_PENDING,
-            ]
-        status_history:
-          type: array
-          items:
-            type: object
-            properties:
-              status: { type: string }
-              changed_at: { type: string, format: date-time }
-              reason: { type: string, nullable: true }
+          enum: [PAID]
+          description: Статус заказа (мок-оплата: сразу PAID)
         items:
           type: array
           items: { $ref: "#/components/schemas/OrderItem" }
-        subtotal: { type: integer, description: "Сумма по позициям, копейки" }
-        delivery_cost: { type: integer, default: 0 }
-        total: { type: integer, description: subtotal + delivery_cost }
-        address: { $ref: "#/components/schemas/AddressResponse" }
-        payment_method: { $ref: "#/components/schemas/PaymentMethodResponse" }
-        comment: { type: string, nullable: true }
-        cancel_reason: { type: string, nullable: true }
+        total_amount:
+          type: integer
+          description: Итоговая сумма заказа в копейках
+        delivery_address:
+          type: string
+          nullable: true
+          description: Адрес доставки (mock)
         created_at: { type: string, format: date-time }
-        paid_at: { type: string, format: date-time, nullable: true }
-        delivered_at: { type: string, format: date-time, nullable: true }
+        updated_at: { type: string, format: date-time }
+
+    OrderReserveFailedItem:
+      type: object
+      required: [sku_id, reason]
+      properties:
+        sku_id: { type: string, format: uuid }
+        requested: { type: integer, nullable: true }
+        available: { type: integer, nullable: true }
+        reason:
+          type: string
+          enum:
+            - OUT_OF_STOCK
+            - INSUFFICIENT_STOCK
+            - PRODUCT_BLOCKED
+            - PRODUCT_DELETED
+            - SKU_NOT_FOUND
+
+    OrderReserveFailedResponse:
+      type: object
+      required: [code, message, failed_items]
+      properties:
+        code: { type: string, example: RESERVE_FAILED }
+        message: { type: string }
+        failed_items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderReserveFailedItem" }
 
     PaginatedOrders:
       type: object

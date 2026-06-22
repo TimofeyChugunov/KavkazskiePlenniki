@@ -5,7 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette import status
 
-from .routers import banners, cart, catalog, categories, collections, favorites
+from .routers import banners, cart, catalog, categories, collections, favorites, orders
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -57,3 +57,4 @@ app.include_router(catalog.router)
 app.include_router(categories.router)
 app.include_router(collections.router)
 app.include_router(favorites.router)
+app.include_router(orders.router)
