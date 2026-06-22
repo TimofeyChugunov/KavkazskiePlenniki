@@ -144,3 +144,11 @@ class ReserveOperation(Base):
     idempotency_key: Mapped[str] = mapped_column(String(36), primary_key=True)
     result: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProcessedEvent(Base):
+    __tablename__ = "processed_events"
+
+    idempotency_key: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

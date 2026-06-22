@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 
 from .database import init_db
-from .routers import invoices, inventory, products, public, skus
+from .routers import invoices, inventory, moderation, products, public, skus
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -135,3 +135,4 @@ app.include_router(skus.router)
 app.include_router(invoices.router)
 app.include_router(public.router)
 app.include_router(inventory.router)
+app.include_router(moderation.router)

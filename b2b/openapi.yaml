@@ -1023,14 +1023,13 @@ paths:
               schema: { $ref: "#/components/schemas/InventoryOrderResponse" }
 
   # ───────────────────── MODERATION EVENTS ─────────────────────
-  /api/v1/moderation/events:
+  /api/v1/events/moderation:
     post:
       tags: [Moderation Events]
       summary: |
         Приём событий от Moderation Service: MODERATED, BLOCKED (с hard_block flag).
-        Идемпотентность через (sender_service, idempotency_key), TTL 24 часа.
-        BLOCKED → если в БД были active_quantity>0 — также отправляются события
-        в B2C (PRODUCT_BLOCKED).
+        Идемпотентность через idempotency_key, TTL 24 часа.
+        BLOCKED → каскадное событие PRODUCT_BLOCKED отправляется в B2C.
       operationId: receiveModerationEvent
       parameters:
         - {
@@ -1045,13 +1044,14 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/ModerationEventRequest" }
       responses:
-        "204": { description: Принято и обработано (или дубликат) }
+        "200": { description: Событие принято и обработано }
         "400":
-          description: Невалидное тело события (не ретраить)
+          description: Невалидное тело события
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
 components:
   securitySchemes:
@@ -1760,31 +1760,32 @@ components:
 
     ModerationEventRequest:
       type: object
-      required: [idempotency_key, product_id, event_type, occurred_at]
+      required: [idempotency_key, product_id, status]
       properties:
         idempotency_key: { type: string, format: uuid }
         product_id: { type: string, format: uuid }
-        event_type: { $ref: "#/components/schemas/ModerationEventType" }
-        moderator_id: { type: string, format: uuid, nullable: true }
-        moderator_comment: { type: string, nullable: true }
-        blocking_reason_id:
-          {
-            type: string,
-            format: uuid,
-            nullable: true,
-            description: Обязательно при BLOCKED,
-          }
+        status: { $ref: "#/components/schemas/ModerationEventType" }
         hard_block:
           {
             type: boolean,
-            default: false,
-            description: При true → товар уходит в HARD_BLOCKED,
+            nullable: true,
+            description: При true и status=BLOCKED → товар уходит в HARD_BLOCKED,
+          }
+        blocking_reason:
+          {
+            type: object,
+            nullable: true,
+            required: [id, title, comment],
+            description: Причина блокировки (обязательно при BLOCKED),
+            properties:
+              id: { type: string, format: uuid }
+              title: { type: string }
+              comment: { type: string },
           }
         field_reports:
           type: array
           nullable: true
           items: { $ref: "#/components/schemas/FieldReport" }
-        occurred_at: { type: string, format: date-time }
 
     FieldReport:
       type: object

@@ -247,3 +247,24 @@ class UnreserveRequest(BaseModel):
 
 class UnreserveResponse(BaseModel):
     ok: bool = True
+
+
+class ModerationBlockingReason(BaseModel):
+    id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    title: str
+    comment: str
+
+
+class ModerationFieldReport(BaseModel):
+    field_name: str
+    sku_id: str | None = None
+    comment: str
+
+
+class ModerationEventRequest(BaseModel):
+    idempotency_key: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    product_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    status: str = Field(..., pattern=r"^(MODERATED|BLOCKED)$")
+    hard_block: bool | None = None
+    blocking_reason: ModerationBlockingReason | None = None
+    field_reports: list[ModerationFieldReport] | None = None
