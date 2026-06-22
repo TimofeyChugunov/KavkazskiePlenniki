@@ -768,3 +768,216 @@ async def test_search_cyrillic_query(mock_fetch, client: AsyncClient):
     call_args = mock_fetch.call_args
     params = call_args[0][1]
     assert params["search"] == "беспроводные наушники"
+
+
+# ==================== US-CAT-03: Карточка товара ====================
+
+
+SAMPLE_PRODUCT_CARD = {
+    "id": "770e8400-e29b-41d4-a716-446655440002",
+    "title": "iPhone 15 Pro Max",
+    "description": "Флагманский смартфон Apple 2024 года с чипом A17 Pro",
+    "status": "MODERATED",
+    "category": {"id": "123e4567-e89b-12d3-a456-426614174001", "name": "Смартфоны"},
+    "images": [
+        {"url": "https://cdn.neomarket.ru/images/iphone15-front.jpg", "ordering": 0},
+        {"url": "https://cdn.neomarket.ru/images/iphone15-back.jpg", "ordering": 1},
+    ],
+    "characteristics": [
+        {"name": "Бренд", "value": "Apple"},
+        {"name": "Страна-производитель", "value": "Китай"},
+    ],
+    "skus": [
+        {
+            "id": "660e8400-e29b-41d4-a716-446655440001",
+            "name": "256GB Black",
+            "price": 12999000,
+            "discount": 0,
+            "image": "/s3/iphone15-black-256.jpg",
+            "active_quantity": 10,
+            "characteristics": [
+                {"name": "Цвет", "value": "Чёрный"},
+                {"name": "Объём памяти", "value": "256 ГБ"},
+            ],
+        },
+        {
+            "id": "660e8400-e29b-41d4-a716-446655440002",
+            "name": "256GB White",
+            "price": 12999000,
+            "discount": 500000,
+            "image": "/s3/iphone15-white-256.jpg",
+            "active_quantity": 3,
+            "characteristics": [
+                {"name": "Цвет", "value": "Белый"},
+                {"name": "Объём памяти", "value": "256 ГБ"},
+            ],
+        },
+    ],
+}
+
+
+PRODUCT_CARD_NO_STOCK = {
+    "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "title": "No Stock Product",
+    "description": "All SKUs out of stock",
+    "status": "MODERATED",
+    "category": {"id": "cat-11111111-2222-3333-4444-555555555555", "name": "Phones"},
+    "images": [{"url": "https://example.com/img.jpg", "ordering": 0}],
+    "characteristics": [],
+    "skus": [
+        {
+            "id": "sku-11111111-2222-3333-4444-555555555555",
+            "name": "Empty SKU",
+            "price": 500000,
+            "discount": 0,
+            "image": "/s3/empty.jpg",
+            "active_quantity": 0,
+            "characteristics": [],
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_product_card_returns_full_data_with_skus(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCT_CARD)
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["id"] == "770e8400-e29b-41d4-a716-446655440002"
+    assert data["title"] == "iPhone 15 Pro Max"
+    assert data["description"] == "Флагманский смартфон Apple 2024 года с чипом A17 Pro"
+    assert data["status"] == "MODERATED"
+    assert len(data["images"]) == 2
+    assert data["images"][0]["url"] == "https://cdn.neomarket.ru/images/iphone15-front.jpg"
+    assert data["images"][1]["url"] == "https://cdn.neomarket.ru/images/iphone15-back.jpg"
+    assert len(data["characteristics"]) == 2
+    assert len(data["skus"]) == 2
+
+    sku1 = data["skus"][0]
+    assert sku1["id"] == "660e8400-e29b-41d4-a716-446655440001"
+    assert sku1["name"] == "256GB Black"
+    assert sku1["price"] == 12999000
+    assert sku1["discount"] == 0
+    assert sku1["active_quantity"] == 10
+    assert len(sku1["characteristics"]) == 2
+
+    sku2 = data["skus"][1]
+    assert sku2["id"] == "660e8400-e29b-41d4-a716-446655440002"
+    assert sku2["price"] == 12999000
+    assert sku2["discount"] == 500000
+    assert sku2["active_quantity"] == 3
+
+    call_args = mock_fetch.call_args
+    assert "/api/v1/public/products/770e8400-e29b-41d4-a716-446655440002" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_cost_price_absent_in_response(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCT_CARD)
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    for sku in data["skus"]:
+        assert "cost_price" not in sku, "cost_price must not be in SKU response"
+        assert "reserved_quantity" not in sku, "reserved_quantity must not be in SKU response"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_blocked_product_returns_404(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (404, {"code": "NOT_FOUND", "message": "Product not found"})
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_sku_without_stock_is_shown_as_unavailable(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, PRODUCT_CARD_NO_STOCK)
+
+    response = await client.get(
+        "/api/v1/products/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["skus"]) == 1
+    assert data["skus"][0]["active_quantity"] == 0
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_product_card_b2b_unavailable_returns_502(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (500, {"code": "INTERNAL_ERROR", "message": "Server error"})
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 502
+    data = response.json()
+    assert data["code"] == "B2B_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_product_card_invalid_uuid_returns_404(mock_fetch, client: AsyncClient):
+    response = await client.get(
+        "/api/v1/products/not-a-valid-uuid",
+    )
+
+    assert response.status_code == 404
+    assert mock_fetch.call_count == 0
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_product_card_with_discount(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCT_CARD)
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    sku_with_discount = data["skus"][1]
+    assert sku_with_discount["discount"] == 500000
+    assert sku_with_discount["price"] == 12999000
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_product_card_without_discount(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCT_CARD)
+
+    response = await client.get(
+        "/api/v1/products/770e8400-e29b-41d4-a716-446655440002",
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    sku_no_discount = data["skus"][0]
+    assert sku_no_discount["discount"] == 0
+    assert sku_no_discount["price"] == 12999000

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Request, status
+import re
 import httpx
 
 from ..config import settings
@@ -171,6 +172,23 @@ async def list_products(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/products/{product_id}", status_code=status.HTTP_200_OK)
+async def get_product_card(
+    product_id: str,
+    sku: str | None = Query(default=None),
+):
+    if not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", product_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    status_code, data = await fetch_from_b2b(f"/api/v1/public/products/{product_id}")
+    check_b2b_status(status_code)
+
+    return data
 
 
 @router.get("/categories/{category_id}/filters", status_code=status.HTTP_200_OK)
