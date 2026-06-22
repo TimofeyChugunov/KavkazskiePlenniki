@@ -152,3 +152,10 @@ class ProcessedEvent(Base):
     idempotency_key: Mapped[str] = mapped_column(String(36), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FulfilledOrder(Base):
+    __tablename__ = "fulfilled_orders"
+
+    order_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

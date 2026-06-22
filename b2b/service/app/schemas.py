@@ -268,3 +268,17 @@ class ModerationEventRequest(BaseModel):
     hard_block: bool | None = None
     blocking_reason: ModerationBlockingReason | None = None
     field_reports: list[ModerationFieldReport] | None = None
+
+
+class FulfillItem(BaseModel):
+    sku_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    quantity: int = Field(..., gt=0)
+
+
+class FulfillRequest(BaseModel):
+    order_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    items: list[FulfillItem] = Field(..., min_length=1)
+
+
+class FulfillResponse(BaseModel):
+    ok: bool = True
