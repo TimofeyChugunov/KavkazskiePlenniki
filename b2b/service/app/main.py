@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 
 from .database import init_db
-from .routers import products
+from .routers import products, skus
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -44,6 +44,22 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             },
             "url": {
                 "missing": "url is required",
+            },
+            "image": {
+                "missing": "image is required",
+            },
+            "product_id": {
+                "missing": "product_id is required",
+                "value_error": "product_id must be a valid UUID",
+                "string_pattern_mismatch": "product_id must be a valid UUID",
+            },
+            "price": {
+                "missing": "price is required",
+                "value_error": "price must be a positive integer (kopecks)",
+            },
+            "cost_price": {
+                "missing": "cost_price is required",
+                "value_error": "cost_price must be a positive integer (kopecks)",
             },
             "name": {
                 "missing": "name is required",
@@ -101,3 +117,4 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
 app.include_router(products.router)
+app.include_router(skus.router)

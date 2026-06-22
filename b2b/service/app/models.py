@@ -58,11 +58,13 @@ class Characteristic(Base):
     __tablename__ = "characteristics"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    product_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("products.id", ondelete="CASCADE"), nullable=True)
+    sku_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("skus.id", ondelete="CASCADE"), nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    product: Mapped["Product"] = relationship(back_populates="characteristics")
+    product: Mapped["Product | None"] = relationship(back_populates="characteristics")
+    sku: Mapped["SKU | None"] = relationship(back_populates="characteristics")
 
 
 class SKU(Base):
@@ -74,6 +76,7 @@ class SKU(Base):
     price: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     discount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reserved_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -82,3 +85,4 @@ class SKU(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     product: Mapped["Product"] = relationship(back_populates="skus")
+    characteristics: Mapped[list["Characteristic"]] = relationship(back_populates="sku")
