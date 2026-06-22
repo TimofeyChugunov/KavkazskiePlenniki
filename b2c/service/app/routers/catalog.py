@@ -110,6 +110,7 @@ async def list_products(
     offset: int = Query(default=0, ge=0),
     category_id: str | None = Query(default=None),
     sort: str = Query(default="rating"),
+    search: str | None = Query(default=None),
     x_session_id: str | None = Query(default=None, alias="X-Session-Id"),
 ):
     if sort not in VALID_SORT_VALUES:
@@ -121,9 +122,30 @@ async def list_products(
             },
         )
 
+    if search is not None and len(search) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": "Search query must be at least 3 characters",
+            },
+        )
+
+    if search is not None and len(search) > 255:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": "Search query must be at most 255 characters",
+            },
+        )
+
     b2b_sort = SORT_MAPPING.get(sort, "created_desc")
     filters = parse_deep_object_filters(request, "filters")
     params = build_b2b_params(limit, offset, category_id, b2b_sort, filters)
+
+    if search:
+        params["search"] = search
 
     status_code, data = await fetch_from_b2b("/api/v1/public/products", params)
     check_b2b_status(status_code)
