@@ -546,11 +546,21 @@ paths:
         "422": { $ref: "#/components/responses/ValidationError" }
     delete:
       tags: [SKUs]
-      summary: Удалить SKU. Запрещено, если reserved_quantity > 0
+      summary: |
+        Удалить SKU. Запрещено если reserved_quantity > 0 или товар HARD_BLOCKED.
+        Если последний SKU у товара в ON_MODERATION → статус товара CREATED + событие DELETED в Moderation.
+        Если active_quantity > 0 и товар MODERATED → событие SKU_OUT_OF_STOCK в B2C.
       operationId: deleteSku
       security: [{ HTTPBearer: [] }]
       responses:
-        "204": { description: Удалён }
+        "200": { description: Удалён }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: HARD_BLOCKED или чужой SKU
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: Есть активные резервы
           content:

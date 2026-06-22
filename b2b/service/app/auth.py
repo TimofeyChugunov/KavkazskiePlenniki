@@ -1,13 +1,25 @@
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import settings
 
-security = HTTPBearer()
-optional_security = HTTPBearer(auto_error=False)
+
+class JSONHTTPBearer(HTTPBearer):
+    async def __call__(self, request: Request) -> HTTPAuthorizationCredentials | None:
+        try:
+            return await super().__call__(request)
+        except HTTPException:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Not authenticated"},
+            )
+
+
+security = JSONHTTPBearer()
+optional_security = JSONHTTPBearer(auto_error=False)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
