@@ -521,3 +521,250 @@ async def test_response_has_no_old_price_field(mock_fetch, client: AsyncClient):
     data = response.json()
     for item in data["items"]:
         assert "old_price" not in item
+
+
+# ==================== US-CAT-02: Текстовый поиск ====================
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_returns_matching_products(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "iPhone"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert data["total_count"] == 2
+
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["search"] == "iPhone"
+
+
+@pytest.mark.asyncio
+async def test_short_query_returns_400(client: AsyncClient):
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "ab"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+    assert "Search query must be at least 3 characters" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_one_char_query_returns_400(client: AsyncClient):
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "a"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_two_char_query_returns_400(client: AsyncClient):
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "ab"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_exactly_3_chars_is_valid(client: AsyncClient):
+    with patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = (200, EMPTY_PRODUCTS_RESPONSE)
+
+        response = await client.get(
+            "/api/v1/products",
+            params={"search": "abc"},
+        )
+
+        assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_long_query_returns_400(mock_fetch, client: AsyncClient):
+    long_query = "a" * 256
+
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": long_query},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+    assert "Search query must be at most 255 characters" in data["message"]
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_exactly_255_chars_is_valid(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, EMPTY_PRODUCTS_RESPONSE)
+    query_255 = "a" * 255
+
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": query_255},
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_special_chars_do_not_break_query(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, EMPTY_PRODUCTS_RESPONSE)
+
+    special_queries = [
+        "iPhone%15",
+        "кофе'",
+        "test%",
+        "test_",
+        "test'",
+        "%test%",
+        "_test_",
+        "a'b'c",
+        'test"',
+        "test\\",
+    ]
+
+    for query in special_queries:
+        mock_fetch.reset_mock()
+        mock_fetch.return_value = (200, EMPTY_PRODUCTS_RESPONSE)
+
+        response = await client.get(
+            "/api/v1/products",
+            params={"search": query},
+        )
+
+        assert response.status_code == 200, f"Failed for query: {query}"
+
+        call_args = mock_fetch.call_args
+        params = call_args[0][1]
+        assert params["search"] == query, f"Search param not passed for: {query}"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_empty_results_returns_200(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, EMPTY_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "несуществующийтовар123"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == []
+    assert data["total_count"] == 0
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_with_category_filter(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={
+            "search": "наушники",
+            "category_id": "123e4567-e89b-12d3-a456-426614174001",
+        },
+    )
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["search"] == "наушники"
+    assert params["category_id"] == "123e4567-e89b-12d3-a456-426614174001"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_with_filters_and_sort(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={
+            "search": "наушники",
+            "category_id": "123e4567-e89b-12d3-a456-426614174001",
+            "filters[brand]": "Sony",
+            "sort": "price_asc",
+        },
+    )
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["search"] == "наушники"
+    assert params["filters[brand]"] == "Sony"
+    assert params["sort"] == "price_asc"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_without_search_param_works(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get("/api/v1/products")
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert "search" not in params
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_with_pagination(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={
+            "search": "iPhone",
+            "limit": 5,
+            "offset": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["search"] == "iPhone"
+    assert params["limit"] == 5
+    assert params["offset"] == 10
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_search_cyrillic_query(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SAMPLE_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        "/api/v1/products",
+        params={"search": "беспроводные наушники"},
+    )
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["search"] == "беспроводные наушники"
