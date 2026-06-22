@@ -170,3 +170,33 @@ class ProductDetailResponse(BaseModel):
     field_reports: list[FieldReportResponse] = []
 
     model_config = {"from_attributes": True}
+
+
+class InvoiceItemCreate(BaseModel):
+    sku_id: str = Field(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    quantity: int = Field(..., gt=0)
+
+
+class InvoiceCreate(BaseModel):
+    items: list[InvoiceItemCreate] = Field(..., min_length=1)
+
+
+class InvoiceItemResponse(BaseModel):
+    id: str
+    sku_id: str
+    sku_name: str
+    quantity: int
+    accepted_quantity: int | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class InvoiceResponse(BaseModel):
+    id: str
+    seller_id: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    items: list[InvoiceItemResponse]
+
+    model_config = {"from_attributes": True}
