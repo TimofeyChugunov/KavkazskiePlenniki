@@ -106,3 +106,20 @@ class SKUCreateResponse(BaseModel):
     characteristics: list[CharacteristicResponse]
 
     model_config = {"from_attributes": True}
+
+
+class ProductUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, min_length=1, max_length=5000)
+    category_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    images: list[ImageCreate] | None = Field(default=None, min_length=1)
+    characteristics: list[CharacteristicCreate] | None = None
+
+
+class SKUUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    price: int | None = Field(default=None, gt=0)
+    cost_price: int | None = Field(default=None, gt=0)
+    discount: int | None = Field(default=None, ge=0)
+    image: str | None = Field(default=None, min_length=1, max_length=500)
+    characteristics: list[CharacteristicCreate] | None = None
