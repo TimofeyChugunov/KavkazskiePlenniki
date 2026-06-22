@@ -183,3 +183,33 @@ async def list_public_products(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get(
+    "/products/{product_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OK"},
+        401: {"model": dict},
+        404: {"model": dict},
+    },
+)
+async def get_public_product(
+    product_id: str,
+    _key: str = Depends(verify_service_key),
+    db: AsyncSession = Depends(get_db),
+):
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    if product.status != "MODERATED" or product.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    return await build_product_response(product, db)
