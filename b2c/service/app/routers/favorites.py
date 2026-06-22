@@ -3,12 +3,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["Favorites"])
 
 _favorites_db: dict[str, list[dict]] = {}
+_subscriptions_db: dict[str, dict[str, dict]] = {}
+
+VALID_NOTIFY_ON = {"IN_STOCK", "PRICE_DOWN"}
 
 
 def _get_user_id(request: Request) -> str:
@@ -150,3 +154,103 @@ async def get_favorites(
         })
 
     return {"items": items, "total_count": total, "limit": limit, "offset": offset}
+
+
+class SubscribeRequest(BaseModel):
+    notify_on: list[str]
+
+
+async def _check_product_exists(product_id: str) -> bool:
+    import httpx
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{settings.B2B_URL}/api/v1/public/products/{product_id}",
+                headers={"X-Service-Key": settings.B2C_TO_B2B_KEY},
+                timeout=10.0,
+            )
+        if resp.status_code == 200:
+            return True
+        if resp.status_code == 404:
+            return False
+        if resp.status_code >= 500:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": "B2B_UNAVAILABLE", "message": "B2B service temporarily unavailable"},
+            )
+        return False
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "B2B_UNAVAILABLE", "message": "B2B service temporarily unavailable"},
+        )
+
+
+def _get_user_subscriptions(user_id: str) -> dict[str, dict]:
+    return _subscriptions_db.setdefault(user_id, {})
+
+
+@router.post("/favorites/{product_id}/subscribe")
+async def subscribe_to_product(product_id: str, request: Request, body: SubscribeRequest):
+    user_id = _get_user_id(request)
+
+    if not body.notify_on:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_NOTIFY_ON", "message": "notify_on must not be empty"},
+        )
+
+    invalid = [v for v in body.notify_on if v not in VALID_NOTIFY_ON]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_NOTIFY_ON", "message": f"Invalid notify_on values: {', '.join(invalid)}"},
+        )
+
+    try:
+        product_exists = await _check_product_exists(product_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "B2B_UNAVAILABLE", "message": "B2B service temporarily unavailable"},
+        )
+    if not product_exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PRODUCT_NOT_FOUND", "message": "Product not found"},
+        )
+
+    subs = _get_user_subscriptions(user_id)
+    if product_id in subs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "SUBSCRIPTION_ALREADY_EXISTS", "message": "Subscription already exists for this product"},
+        )
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    subs[product_id] = {
+        "product_id": product_id,
+        "notify_on": body.notify_on,
+        "created_at": created_at,
+    }
+
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content={
+            "product_id": product_id,
+            "notify_on": body.notify_on,
+            "created_at": created_at,
+        },
+    )
+
+
+@router.delete("/favorites/{product_id}/subscribe", status_code=status.HTTP_204_NO_CONTENT)
+async def unsubscribe_from_product(product_id: str, request: Request):
+    user_id = _get_user_id(request)
+    subs = _get_user_subscriptions(user_id)
+    subs.pop(product_id, None)
