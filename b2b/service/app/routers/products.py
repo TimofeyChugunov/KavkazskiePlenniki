@@ -1,10 +1,14 @@
 import re
+import uuid
+from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import get_current_user
+from ..config import settings
 from ..database import get_db
 from ..models import Category, Characteristic, Product, ProductImage, SKU
 from .skus import send_moderation_event
@@ -18,6 +22,91 @@ def slugify(title: str) -> str:
     slug = re.sub(r"[^\w\s-]", "", slug)
     slug = re.sub(r"[-\s]+", "-", slug)
     return slug[:255]
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OK"},
+        401: {"model": ErrorResponse},
+    },
+)
+async def list_my_products(
+    limit: int = 20,
+    offset: int = 0,
+    status_filter: str | None = None,
+    include_deleted: bool = False,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    seller_id = current_user.get("sub")
+    if not seller_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "Invalid token"},
+        )
+
+    query = select(Product).where(Product.seller_id == seller_id)
+
+    if not include_deleted:
+        query = query.where(Product.deleted == False)
+
+    if status_filter:
+        query = query.where(Product.status == status_filter)
+
+    query = query.order_by(Product.created_at.desc()).limit(limit).offset(offset)
+
+    result = await db.execute(query)
+    products = result.scalars().all()
+
+    count_query = select(Product).where(Product.seller_id == seller_id)
+    if not include_deleted:
+        count_query = count_query.where(Product.deleted == False)
+    if status_filter:
+        count_query = count_query.where(Product.status == status_filter)
+
+    from sqlalchemy import func
+    total = (await db.execute(select(func.count()).select_from(count_query.subquery()))).scalar() or 0
+
+    items = []
+    for p in products:
+        items.append({
+            "id": p.id,
+            "title": p.title,
+            "slug": p.slug,
+            "status": p.status,
+            "category_id": p.category_id,
+            "deleted": p.deleted,
+            "created_at": p.created_at,
+            "min_price": None,
+            "cover_image": None,
+        })
+
+    return {
+        "items": items,
+        "total_count": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+async def send_b2c_product_deleted(product_id: str, sku_ids: list[str]) -> None:
+    idempotency_key = str(uuid.uuid4())
+    payload = {
+        "idempotency_key": idempotency_key,
+        "event": "PRODUCT_DELETED",
+        "product_id": product_id,
+        "sku_ids": sku_ids,
+        "date": datetime.now(timezone.utc).isoformat(),
+    }
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{settings.B2C_URL}/api/v1/events/product",
+            json=payload,
+            headers={"X-Service-Key": settings.B2B_TO_B2C_KEY},
+            timeout=5.0,
+        )
 
 
 @router.post(
@@ -88,6 +177,69 @@ async def create_product(
         updated_at=product.updated_at,
     )
 
+
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Помечен удалённым"},
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
+)
+async def delete_product(
+    product_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    seller_id = current_user.get("sub")
+    if not seller_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "Invalid token"},
+        )
+
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    if product.seller_id != seller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_OWNER", "message": "Product does not belong to the authenticated seller"},
+        )
+
+    if product.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_REQUEST", "message": "Product already deleted"},
+        )
+
+    product.deleted = True
+    await db.commit()
+
+    sku_ids = [
+        sku.id
+        for sku in (await db.execute(select(SKU).where(SKU.product_id == product.id))).scalars().all()
+    ]
+
+    await send_moderation_event(
+        product_id=product.id,
+        seller_id=seller_id,
+        event="DELETED",
+    )
+
+    await send_b2c_product_deleted(
+        product_id=product.id,
+        sku_ids=sku_ids,
+    )
+
+    return {"ok": True}
 
 @router.put(
     "/{product_id}",
