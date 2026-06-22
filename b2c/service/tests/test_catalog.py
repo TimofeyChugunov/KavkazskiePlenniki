@@ -981,3 +981,209 @@ async def test_product_card_without_discount(mock_fetch, client: AsyncClient):
     sku_no_discount = data["skus"][0]
     assert sku_no_discount["discount"] == 0
     assert sku_no_discount["price"] == 12999000
+
+
+# ==================== US-CAT-04: Похожие товары ====================
+
+
+SIMILAR_PRODUCTS_RESPONSE = {
+    "items": [
+        {
+            "id": "770e8400-e29b-41d4-a716-446655440010",
+            "title": "Samsung Galaxy S24 Ultra",
+            "image": "https://cdn.neomarket.ru/images/s24u.jpg",
+            "price": 11999000,
+            "in_stock": True,
+            "is_in_cart": False,
+        },
+        {
+            "id": "770e8400-e29b-41d4-a716-446655440011",
+            "title": "Google Pixel 8 Pro",
+            "image": "https://cdn.neomarket.ru/images/pixel8.jpg",
+            "price": 7999000,
+            "in_stock": True,
+            "is_in_cart": False,
+        },
+    ],
+    "total_count": 15,
+    "limit": 8,
+    "offset": 0,
+}
+
+EMPTY_SIMILAR_RESPONSE = {
+    "items": [],
+    "total_count": 0,
+    "limit": 8,
+    "offset": 0,
+}
+
+PRODUCT_ID = "770e8400-e29b-41d4-a716-446655440002"
+CATEGORY_ID = "123e4567-e89b-12d3-a456-426614174001"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_returns_up_to_8_from_same_category(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SIMILAR_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total_count" in data
+    assert "limit" in data
+    assert "offset" in data
+    assert len(data["items"]) == 2
+    assert data["total_count"] == 15
+    assert data["limit"] == 8
+    assert data["offset"] == 0
+
+    item = data["items"][0]
+    assert item["id"] == "770e8400-e29b-41d4-a716-446655440010"
+    assert item["title"] == "Samsung Galaxy S24 Ultra"
+    assert item["image"] == "https://cdn.neomarket.ru/images/s24u.jpg"
+    assert item["price"] == 11999000
+    assert item["in_stock"] is True
+    assert item["is_in_cart"] is False
+
+    assert PRODUCT_ID not in [i["id"] for i in data["items"]]
+
+    call_args = mock_fetch.call_args
+    assert "/api/v1/public/products/" in call_args[0][0]
+    assert "/similar" in call_args[0][0]
+    params = call_args[0][1]
+    assert params["category"] == CATEGORY_ID
+    assert params["limit"] == 8
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_empty_category_returns_200_empty_list(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, EMPTY_SIMILAR_RESPONSE)
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == []
+    assert data["total_count"] == 0
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_unknown_product_returns_404(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (404, {"code": "NOT_FOUND", "message": "Product not found"})
+
+    response = await client.get(
+        "/api/v1/products/00000000-0000-0000-0000-000000000000/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "NOT_FOUND"
+    assert data["message"] == "Product not found"
+
+
+@pytest.mark.asyncio
+async def test_similar_invalid_product_id_returns_404(client: AsyncClient):
+    response = await client.get(
+        "/api/v1/products/not-a-valid-uuid/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 404
+    data = response.json()
+    assert data["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_limit_exceeds_max_returns_400(mock_fetch, client: AsyncClient):
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 100},
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_nonexistent_category_returns_400(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (400, {"code": "INVALID_REQUEST", "message": "Nonexistent category id"})
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": "00000000-0000-0000-0000-000000000000", "limit": 8},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_with_offset(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, SIMILAR_PRODUCTS_RESPONSE)
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 5, "offset": 10},
+    )
+
+    assert response.status_code == 200
+    call_args = mock_fetch.call_args
+    params = call_args[0][1]
+    assert params["limit"] == 5
+    assert params["offset"] == 10
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_b2b_unavailable_returns_502(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (500, {"code": "INTERNAL_ERROR", "message": "Server error"})
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 502
+    data = response.json()
+    assert data["code"] == "B2B_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+@patch("app.routers.catalog.fetch_from_b2b", new_callable=AsyncMock)
+async def test_similar_only_current_product_in_category_returns_empty(mock_fetch, client: AsyncClient):
+    mock_fetch.return_value = (200, EMPTY_SIMILAR_RESPONSE)
+
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+        params={"category": CATEGORY_ID, "limit": 8},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["items"] == []
+    assert data["total_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_similar_missing_category_returns_400(client: AsyncClient):
+    response = await client.get(
+        f"/api/v1/products/{PRODUCT_ID}/similar",
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert data["code"] == "INVALID_REQUEST"

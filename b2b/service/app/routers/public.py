@@ -213,3 +213,111 @@ async def get_public_product(
         )
 
     return await build_product_response(product, db)
+
+
+@router.get(
+    "/products/{product_id}/similar",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "OK"},
+        400: {"model": dict},
+        401: {"model": dict},
+        404: {"model": dict},
+    },
+)
+async def get_public_similar_products(
+    product_id: str,
+    _key: str = Depends(verify_service_key),
+    category: str = Query(),
+    limit: int = Query(default=8, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    product = await db.get(Product, product_id)
+    if not product or product.status != "MODERATED" or product.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    cat = await db.get(Category, category)
+    if not cat:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_REQUEST", "message": "Nonexistent category id"},
+        )
+
+    subq = (
+        select(SKU.product_id)
+        .where(SKU.active_quantity > 0)
+        .group_by(SKU.product_id)
+        .having(func.sum(SKU.active_quantity) > 0)
+    )
+
+    query = (
+        select(Product)
+        .where(Product.status == "MODERATED")
+        .where(Product.deleted == False)
+        .where(Product.id.in_(subq))
+        .where(Product.id != product_id)
+        .where(Product.category_id == category)
+    )
+
+    total = (await db.execute(
+        select(func.count()).select_from(query.subquery())
+    )).scalar() or 0
+
+    if total == 0 and category != product.category_id:
+        query_fallback = (
+            select(Product)
+            .where(Product.status == "MODERATED")
+            .where(Product.deleted == False)
+            .where(Product.id.in_(subq))
+            .where(Product.id != product_id)
+            .where(Product.category_id == product.category_id)
+        )
+        total = (await db.execute(
+            select(func.count()).select_from(query_fallback.subquery())
+        )).scalar() or 0
+        query = query_fallback
+
+    if total == 0:
+        return {"items": [], "total_count": 0, "limit": limit, "offset": offset}
+
+    query = query.order_by(func.random()).limit(limit).offset(offset)
+    result = await db.execute(query)
+    products = result.scalars().all()
+
+    items = []
+    for p in products:
+        images = (
+            await db.execute(
+                select(ProductImage).where(ProductImage.product_id == p.id)
+            )
+        ).scalars().all()
+        skus = (
+            await db.execute(select(SKU).where(SKU.product_id == p.id))
+        ).scalars().all()
+
+        price = min(s.price for s in skus) if skus else 0
+        image_url = next(
+            (i.url for i in sorted(images, key=lambda x: x.ordering)),
+            None,
+        )
+        in_stock = any(s.active_quantity > 0 for s in skus)
+
+        items.append({
+            "id": p.id,
+            "title": p.title,
+            "image": image_url,
+            "price": price,
+            "in_stock": in_stock,
+            "is_in_cart": False,
+        })
+
+    return {
+        "items": items,
+        "total_count": total,
+        "limit": limit,
+        "offset": offset,
+    }

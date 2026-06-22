@@ -347,19 +347,39 @@ paths:
     get:
       tags: [Catalog]
       summary: Похожие товары
+      description: |
+        Выборка похожих товаров из той же категории (случайная выборка).
+        Если в категории мало товаров — расширяется на родительскую категорию.
+        Текущий товар исключается из результата.
       security: []
       parameters:
+        - name: category
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+          description: ID категории товара
         - name: limit
           in: query
-          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+          schema: { type: integer, minimum: 1, maximum: 20, default: 8 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: Список
+          description: Список похожих товаров
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/CatalogProductCard" }
+              schema: { $ref: "#/components/schemas/SimilarProductsResponse" }
+        "400":
+          description: Несуществующая категория
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/catalog/banners:
     get:
@@ -1013,6 +1033,29 @@ components:
             children:
               type: array
               items: { $ref: "#/components/schemas/CategoryTreeNode" }
+
+    # -------- Похожие товары --------
+    SimilarProductItem:
+      type: object
+      required: [id, title, image, price, in_stock, is_in_cart]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        image: { type: string, format: uri, nullable: true }
+        price: { type: integer, description: Минимальная цена среди SKU, копейки }
+        in_stock: { type: boolean }
+        is_in_cart: { type: boolean }
+
+    SimilarProductsResponse:
+      type: object
+      required: [items, total_count, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SimilarProductItem" }
+        total_count: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
 
     # -------- Каталог --------
     CatalogFilter:
