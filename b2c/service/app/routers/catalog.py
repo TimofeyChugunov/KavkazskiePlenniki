@@ -1,5 +1,5 @@
-from fastapi import APIRouter, HTTPException, Query, Request, status
 import re
+from fastapi import APIRouter, HTTPException, Query, Request, status
 import httpx
 
 from ..config import settings
@@ -189,6 +189,62 @@ async def get_product_card(
     check_b2b_status(status_code)
 
     return data
+
+
+@router.get("/products/{product_id}/similar", status_code=status.HTTP_200_OK)
+async def get_similar_products(
+    product_id: str,
+    category: str = Query(),
+    limit: int = Query(default=8, ge=1, le=20),
+    offset: int = Query(default=0, ge=0),
+):
+    if not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", product_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+
+    params: dict = {
+        "category": category,
+        "limit": limit,
+        "offset": offset,
+    }
+
+    status_code, data = await fetch_from_b2b(
+        f"/api/v1/public/products/{product_id}/similar",
+        params,
+    )
+
+    if status_code == 404:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"},
+        )
+    if status_code == 400:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_REQUEST", "message": data.get("message", "Nonexistent category id") if isinstance(data, dict) else "Nonexistent category id"},
+        )
+    check_b2b_status(status_code)
+
+    items = data.get("items", [])
+    mapped_items = []
+    for item in items:
+        mapped_items.append({
+            "id": item["id"],
+            "title": item["title"],
+            "image": item.get("image"),
+            "price": item.get("price", 0),
+            "in_stock": item.get("in_stock", False),
+            "is_in_cart": item.get("is_in_cart", False),
+        })
+
+    return {
+        "items": mapped_items,
+        "total_count": data.get("total_count", 0),
+        "limit": data.get("limit", limit),
+        "offset": data.get("offset", offset),
+    }
 
 
 @router.get("/categories/{category_id}/filters", status_code=status.HTTP_200_OK)
