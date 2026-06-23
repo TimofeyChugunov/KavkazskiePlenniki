@@ -10,6 +10,7 @@ from app.main import app
 from app.config import settings
 
 USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+OTHER_USER_ID = "11111111-2222-3333-4444-555555555555"
 SKU_ID_1 = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 SKU_ID_2 = "8a4e3f9c-1a2b-4c8d-9e5f-6b7a8c9d0e1f"
 PRODUCT_ID_1 = "550e8400-e29b-41d4-a716-446655440000"
@@ -233,7 +234,41 @@ def mock_b2b_503_response() -> AsyncMock:
     return mock
 
 
-# === REQUIRED 4 TESTS ===
+async def _create_order(
+    client: AsyncClient,
+    idempotency_key: str,
+    items: list[dict],
+    user_id: str = USER_ID,
+    delivery_address: str | None = None,
+) -> dict:
+    products = {
+        item["sku_id"]: {"id": PRODUCT_ID_1, **SAMPLE_B2B_PRODUCT_1}
+        for item in items
+    }
+
+    with patch(
+        "app.routers.orders._fetch_b2b_products",
+        mock_fetch_products(products),
+    ):
+        with patch(
+            "app.routers.orders._call_b2b_reserve",
+            mock_reserve_success(SAMPLE_B2B_RESERVE_SINGLE_SUCCESS),
+        ):
+            body = {
+                "idempotency_key": idempotency_key,
+                "items": items,
+            }
+            if delivery_address is not None:
+                body["delivery_address"] = delivery_address
+            resp = await client.post(
+                "/api/v1/orders",
+                json=body,
+                headers=auth_header(user_id),
+            )
+    return resp.json()
+
+
+# === US-ORD-01 REQUIRED TESTS ===
 
 
 @pytest.mark.asyncio
@@ -394,6 +429,154 @@ async def test_b2b_unavailable_returns_503(client: AsyncClient):
     assert resp.status_code == 503
     data = resp.json()
     assert data["code"] == "B2B_UNAVAILABLE"
+
+
+# === US-ORD-02 REQUIRED TESTS ===
+
+
+@pytest.mark.asyncio
+async def test_orders_list_returns_own_orders_paginated(client: AsyncClient):
+    await _create_order(client, "key-1", [{"sku_id": SKU_ID_1, "quantity": 1}])
+    await _create_order(client, "key-2", [{"sku_id": SKU_ID_1, "quantity": 2}])
+    await _create_order(client, "key-3", [{"sku_id": SKU_ID_1, "quantity": 3}])
+
+    resp = await client.get(
+        "/api/v1/orders",
+        params={"limit": 2, "offset": 0},
+        headers=auth_header(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] == 3
+    assert len(data["items"]) == 2
+    assert data["limit"] == 2
+    assert data["offset"] == 0
+
+    for item in data["items"]:
+        assert "id" in item
+        assert "status" in item
+        assert "total_amount" in item
+        assert "items_count" in item
+        assert "created_at" in item
+        assert "updated_at" in item
+        assert "items" not in item
+
+    resp2 = await client.get(
+        "/api/v1/orders",
+        params={"limit": 2, "offset": 2},
+        headers=auth_header(),
+    )
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["total_count"] == 3
+    assert len(data2["items"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_order_detail_shows_fixed_prices(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 3}],
+    )
+    order_id = order["id"]
+
+    resp = await client.get(
+        f"/api/v1/orders/{order_id}",
+        headers=auth_header(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["id"] == order_id
+    assert data["status"] == "PAID"
+    assert len(data["items"]) == 1
+
+    item = data["items"][0]
+    assert item["unit_price"] == 12999000
+    assert item["quantity"] == 3
+    assert item["line_total"] == 12999000 * 3
+    assert item["product_title"] == "iPhone 15 Pro Max"
+    assert item["sku_name"] == "256GB Black"
+
+    assert data["total_amount"] == 12999000 * 3
+
+
+@pytest.mark.asyncio
+async def test_other_user_order_returns_404_not_403(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 1}],
+        user_id=USER_ID,
+    )
+    order_id = order["id"]
+
+    resp = await client.get(
+        f"/api/v1/orders/{order_id}",
+        headers=auth_header(OTHER_USER_ID),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "ORDER_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_orders_list_does_not_show_other_users_orders(client: AsyncClient):
+    await _create_order(
+        client,
+        "key-1",
+        [{"sku_id": SKU_ID_1, "quantity": 1}],
+        user_id=USER_ID,
+    )
+    await _create_order(
+        client,
+        "key-2",
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+        user_id=OTHER_USER_ID,
+    )
+
+    resp = await client.get(
+        "/api/v1/orders",
+        headers=auth_header(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_orders_list_filter_by_status(client: AsyncClient):
+    await _create_order(client, "key-1", [{"sku_id": SKU_ID_1, "quantity": 1}])
+    await _create_order(client, "key-2", [{"sku_id": SKU_ID_1, "quantity": 2}])
+
+    resp = await client.get(
+        "/api/v1/orders",
+        params={"status": "PAID"},
+        headers=auth_header(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] == 2
+    for item in data["items"]:
+        assert item["status"] == "PAID"
+
+    resp2 = await client.get(
+        "/api/v1/orders",
+        params={"status": "DELIVERED"},
+        headers=auth_header(),
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["total_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_orders_list_invalid_status_returns_400(client: AsyncClient):
+    resp = await client.get(
+        "/api/v1/orders",
+        params={"status": "INVALID_STATUS"},
+        headers=auth_header(),
+    )
+    assert resp.status_code == 400
 
 
 # === ADDITIONAL TESTS ===
@@ -595,81 +778,9 @@ async def test_delivery_address_is_optional(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_order_by_id(client: AsyncClient):
-    products = {SKU_ID_1: SAMPLE_B2B_PRODUCT_1}
-
-    with patch(
-        "app.routers.orders._fetch_b2b_products",
-        mock_fetch_products(products),
-    ):
-        with patch(
-            "app.routers.orders._call_b2b_reserve",
-            mock_reserve_success(SAMPLE_B2B_RESERVE_SINGLE_SUCCESS),
-        ):
-            create_resp = await client.post(
-                "/api/v1/orders",
-                json={
-                    "idempotency_key": IDEMPOTENCY_KEY,
-                    "items": [{"sku_id": SKU_ID_1, "quantity": 2}],
-                },
-                headers=auth_header(),
-            )
-
-    assert create_resp.status_code == 201
-    order_id = create_resp.json()["id"]
-
-    get_resp = await client.get(
-        f"/api/v1/orders/{order_id}",
-        headers=auth_header(),
-    )
-    assert get_resp.status_code == 200
-    assert get_resp.json()["id"] == order_id
-    assert get_resp.json()["status"] == "PAID"
-
-
-@pytest.mark.asyncio
 async def test_get_nonexistent_order_returns_404(client: AsyncClient):
     resp = await client.get(
         "/api/v1/orders/nonexistent-id",
         headers=auth_header(),
     )
     assert resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_list_orders_returns_created_orders(client: AsyncClient):
-    products = {SKU_ID_1: SAMPLE_B2B_PRODUCT_1}
-
-    with patch(
-        "app.routers.orders._fetch_b2b_products",
-        mock_fetch_products(products),
-    ):
-        with patch(
-            "app.routers.orders._call_b2b_reserve",
-            mock_reserve_success(SAMPLE_B2B_RESERVE_SINGLE_SUCCESS),
-        ):
-            await client.post(
-                "/api/v1/orders",
-                json={
-                    "idempotency_key": "key-1",
-                    "items": [{"sku_id": SKU_ID_1, "quantity": 1}],
-                },
-                headers=auth_header(),
-            )
-            await client.post(
-                "/api/v1/orders",
-                json={
-                    "idempotency_key": "key-2",
-                    "items": [{"sku_id": SKU_ID_1, "quantity": 2}],
-                },
-                headers=auth_header(),
-            )
-
-    resp = await client.get(
-        "/api/v1/orders",
-        headers=auth_header(),
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_count"] == 2
-    assert len(data["items"]) == 2

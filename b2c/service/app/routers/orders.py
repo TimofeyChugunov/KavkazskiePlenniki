@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from ..config import settings
@@ -149,12 +149,10 @@ async def create_order(
     user_id = _get_user_id(request)
     idempotency_key = body.idempotency_key
 
-    # 0. Idempotency check
     existing = _orders_db.get(idempotency_key)
     if existing:
         return existing
 
-    # 1. Validation
     if not body.items:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -174,14 +172,12 @@ async def create_order(
                 },
             )
 
-    # 2. Fetch products from B2B (get product info by SKU IDs)
     sku_ids = list({item.sku_id for item in body.items})
     try:
         products = await _fetch_b2b_products(sku_ids)
     except HTTPException:
         raise
 
-    # 3. Pre-reserve validation: check product status, availability
     failed_items: list[dict] = []
     sku_info_map: dict[str, dict] = {}
 
@@ -198,7 +194,6 @@ async def create_order(
 
         product = found["product"]
         sku = found["sku"]
-
         sku_info_map[item.sku_id] = found
 
         if product.get("status") == "BLOCKED":
@@ -241,7 +236,6 @@ async def create_order(
             },
         )
 
-    # 4. Reserve in B2B (all-or-nothing)
     reserve_items = [
         {"sku_id": item.sku_id, "quantity": item.quantity}
         for item in body.items
@@ -259,7 +253,6 @@ async def create_order(
             },
         )
 
-    # 5. Create order with fixed prices
     now = datetime.now(timezone.utc)
     order_id = str(uuid.uuid4())
     order_items = []
@@ -286,6 +279,7 @@ async def create_order(
 
     order = {
         "id": order_id,
+        "user_id": user_id,
         "status": "PAID",
         "items": order_items,
         "total_amount": total_amount,
@@ -309,17 +303,47 @@ async def create_order(
 )
 async def list_orders(
     request: Request,
-    limit: int = 20,
-    offset: int = 0,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status"),
 ):
-    _get_user_id(request)
+    user_id = _get_user_id(request)
 
-    all_orders = list(_orders_db.values())
-    total = len(all_orders)
-    page = all_orders[offset : offset + limit]
+    VALID_STATUSES = {"PAID", "ASSEMBLING", "DELIVERING", "DELIVERED", "CANCELLED", "CANCEL_PENDING"}
+    if status_filter and status_filter not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_REQUEST",
+                "message": f"Invalid status filter. Allowed: {', '.join(sorted(VALID_STATUSES))}",
+            },
+        )
+
+    user_orders = [
+        o for o in _orders_db.values()
+        if o.get("user_id") == user_id
+    ]
+
+    if status_filter:
+        user_orders = [o for o in user_orders if o.get("status") == status_filter]
+
+    total = len(user_orders)
+    page = user_orders[offset : offset + limit]
+
+    items = [
+        {
+            "id": o["id"],
+            "status": o["status"],
+            "total_amount": o["total_amount"],
+            "items_count": len(o["items"]),
+            "created_at": o["created_at"],
+            "updated_at": o["updated_at"],
+        }
+        for o in page
+    ]
 
     return {
-        "items": page,
+        "items": items,
         "total_count": total,
         "limit": limit,
         "offset": offset,
@@ -339,13 +363,13 @@ async def get_order(
     order_id: str,
     request: Request,
 ):
-    _get_user_id(request)
+    user_id = _get_user_id(request)
 
     for order in _orders_db.values():
-        if order["id"] == order_id:
+        if order["id"] == order_id and order.get("user_id") == user_id:
             return order
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail={"code": "NOT_FOUND", "message": "Заказ не найден"},
+        detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"},
     )

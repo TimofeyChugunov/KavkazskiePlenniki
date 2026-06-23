@@ -624,6 +624,10 @@ paths:
     get:
       tags: [Orders]
       summary: История заказов покупателя
+      description: |
+        Список заказов текущего пользователя (user_id из JWT).
+        Поддерживает пагинацию (limit, offset) и фильтр по статусу.
+        В списке items не разворачиваются — только items_count.
       parameters:
         - $ref: "#/components/parameters/LimitParam"
         - $ref: "#/components/parameters/OffsetParam"
@@ -696,13 +700,22 @@ paths:
     get:
       tags: [Orders]
       summary: Карточка заказа
+      description: |
+        Детали заказа с зафиксированными ценами.
+        IDOR-защита: user_id из JWT claims. Чужой заказ → 404 (не 403),
+        чтобы не раскрывать факт существования.
       responses:
         "200":
           description: Заказ
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OrderResponse" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Заказ не найден (или принадлежит другому пользователю)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/orders/{order_id}/cancel:
     parameters:
@@ -1366,13 +1379,31 @@ components:
           type: array
           items: { $ref: "#/components/schemas/OrderReserveFailedItem" }
 
+    OrderListItem:
+      type: object
+      required:
+        [id, status, total_amount, items_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CREATED, PAID, ASSEMBLING, DELIVERING, DELIVERED, CANCELLED, CANCEL_PENDING]
+        total_amount:
+          type: integer
+          description: Итоговая сумма заказа в копейках
+        items_count:
+          type: integer
+          description: Количество позиций в заказе
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     PaginatedOrders:
       type: object
       required: [items, total_count, limit, offset]
       properties:
         items:
           type: array
-          items: { $ref: "#/components/schemas/OrderResponse" }
+          items: { $ref: "#/components/schemas/OrderListItem" }
         total_count: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
