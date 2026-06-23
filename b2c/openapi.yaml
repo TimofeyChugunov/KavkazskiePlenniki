@@ -724,7 +724,7 @@ paths:
       tags: [Orders]
       summary: Отменить заказ
       description: |
-        Отмена разрешена только в статусах CREATED/PAID/ASSEMBLING.
+        Отмена разрешена в статусах CREATED, PAID, ASSEMBLING, DELIVERING.
         Алгоритм:
         1. Перевод заказа в CANCEL_PENDING.
         2. Вызов unreserve в B2B (идемпотентно по order_id).
@@ -746,6 +746,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OrderResponse" }
+        "404":
+          description: Заказ не найден
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: Статус не допускает отмену
           content:

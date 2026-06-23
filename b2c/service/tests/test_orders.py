@@ -784,3 +784,164 @@ async def test_get_nonexistent_order_returns_404(client: AsyncClient):
         headers=auth_header(),
     )
     assert resp.status_code == 404
+
+
+# === US-ORD-03 REQUIRED TESTS ===
+
+
+@pytest.mark.asyncio
+async def test_cancel_paid_order_transitions_to_cancelled(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+    )
+    order_id = order["id"]
+
+    async def mock_unreserve(*args, **kwargs):
+        pass
+
+    with patch("app.routers.orders._call_b2b_unreserve", mock_unreserve):
+        resp = await client.post(
+            f"/api/v1/orders/{order_id}/cancel",
+            headers=auth_header(),
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == order_id
+    assert data["status"] == "CANCELLED"
+    assert len(data["items"]) == 1
+    assert data["items"][0]["sku_id"] == SKU_ID_1
+    assert data["items"][0]["quantity"] == 2
+    assert data["items"][0]["unit_price"] == 12999000
+    assert data["items"][0]["line_total"] == 12999000 * 2
+    assert data["total_amount"] == 12999000 * 2
+    assert "created_at" in data
+    assert "updated_at" in data
+
+
+@pytest.mark.asyncio
+async def test_unreserve_failure_transitions_to_cancel_pending(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+    )
+    order_id = order["id"]
+
+    async def mock_unreserve_fail(*args, **kwargs):
+        raise Exception("B2B unreserve failed")
+
+    with patch("app.routers.orders._call_b2b_unreserve", mock_unreserve_fail):
+        resp = await client.post(
+            f"/api/v1/orders/{order_id}/cancel",
+            headers=auth_header(),
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == order_id
+    assert data["status"] == "CANCEL_PENDING"
+    assert data["items"][0]["sku_id"] == SKU_ID_1
+    assert data["items"][0]["quantity"] == 2
+
+
+@pytest.mark.asyncio
+async def test_cancel_assembling_order_returns_409(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+    )
+    order_id = order["id"]
+
+    import app.routers.orders as orders_module
+    for o in orders_module._orders_db.values():
+        if o["id"] == order_id:
+            o["status"] = "ASSEMBLING"
+            break
+
+    async def mock_unreserve(*args, **kwargs):
+        pass
+
+    with patch("app.routers.orders._call_b2b_unreserve", mock_unreserve):
+        resp = await client.post(
+            f"/api/v1/orders/{order_id}/cancel",
+            headers=auth_header(),
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == order_id
+    assert data["status"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_other_user_order_returns_404_on_cancel(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 1}],
+        user_id=USER_ID,
+    )
+    order_id = order["id"]
+
+    resp = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=auth_header(OTHER_USER_ID),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "ORDER_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_cancel_delivered_order_returns_409(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+    )
+    order_id = order["id"]
+
+    import app.routers.orders as orders_module
+    for o in orders_module._orders_db.values():
+        if o["id"] == order_id:
+            o["status"] = "DELIVERED"
+            break
+
+    resp = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=auth_header(),
+    )
+
+    assert resp.status_code == 409
+    data = resp.json()
+    assert data["code"] == "CANCEL_NOT_ALLOWED"
+    assert data["current_status"] == "DELIVERED"
+
+
+@pytest.mark.asyncio
+async def test_cancel_already_cancelled_order_returns_409(client: AsyncClient):
+    order = await _create_order(
+        client,
+        IDEMPOTENCY_KEY,
+        [{"sku_id": SKU_ID_1, "quantity": 2}],
+    )
+    order_id = order["id"]
+
+    import app.routers.orders as orders_module
+    for o in orders_module._orders_db.values():
+        if o["id"] == order_id:
+            o["status"] = "CANCELLED"
+            break
+
+    resp = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=auth_header(),
+    )
+
+    assert resp.status_code == 409
+    data = resp.json()
+    assert data["code"] == "CANCEL_NOT_ALLOWED"
+    assert data["current_status"] == "CANCELLED"
