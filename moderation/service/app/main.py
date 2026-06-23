@@ -5,7 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette import status
 
-from .routers import tickets
+from .routers import tickets, b2b_events
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -52,3 +52,4 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 
 app.include_router(tickets.router)
+app.include_router(b2b_events.router)

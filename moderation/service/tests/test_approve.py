@@ -164,7 +164,7 @@ async def test_approve_without_sku_returns_409(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_approve_hard_blocked_returns_409(client: AsyncClient):
+async def test_approve_hard_blocked_returns_403(client: AsyncClient):
     import app.routers.tickets as tickets_module
     ticket = _make_ticket(status="HARD_BLOCKED")
     tickets_module._tickets_db[TICKET_ID] = ticket
@@ -174,7 +174,7 @@ async def test_approve_hard_blocked_returns_409(client: AsyncClient):
         headers=auth_header(),
     )
 
-    assert resp.status_code == 409
+    assert resp.status_code == 403
     data = resp.json()
     assert data["code"] == "PRODUCT_PERMANENTLY_BLOCKED"
 
