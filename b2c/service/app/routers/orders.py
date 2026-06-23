@@ -12,6 +12,8 @@ router = APIRouter(prefix="/api/v1", tags=["Orders"])
 _orders_db: dict[str, dict] = {}
 _B2B_SERVICE_HEADERS = {"X-Service-Key": settings.B2C_TO_B2B_KEY}
 
+CANCELABLE_STATUSES = {"CREATED", "PAID", "ASSEMBLING", "DELIVERING"}
+
 
 class OrderItemRequest(BaseModel):
     sku_id: str = Field(..., min_length=1)
@@ -128,6 +130,19 @@ async def _call_b2b_reserve(
             "message": "Сервис товаров временно недоступен, попробуйте позже",
         },
     )
+
+
+async def _call_b2b_unreserve(order_id: str, items: list[dict]) -> None:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{settings.B2B_URL}/api/v1/inventory/unreserve",
+            headers=_B2B_SERVICE_HEADERS,
+            json={"order_id": order_id, "items": items},
+            timeout=10.0,
+        )
+
+    if resp.status_code != 200:
+        raise Exception("B2B unreserve failed")
 
 
 @router.post(
@@ -309,7 +324,7 @@ async def list_orders(
 ):
     user_id = _get_user_id(request)
 
-    VALID_STATUSES = {"PAID", "ASSEMBLING", "DELIVERING", "DELIVERED", "CANCELLED", "CANCEL_PENDING"}
+    VALID_STATUSES = {"CREATED", "PAID", "ASSEMBLING", "DELIVERING", "DELIVERED", "CANCELLED", "CANCEL_PENDING"}
     if status_filter and status_filter not in VALID_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -373,3 +388,56 @@ async def get_order(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"},
     )
+
+
+@router.post(
+    "/orders/{order_id}/cancel",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Заказ отменён или переведён в CANCEL_PENDING"},
+        401: {"description": "Не авторизован"},
+        404: {"description": "Заказ не найден"},
+        409: {"description": "Отмена невозможна"},
+    },
+)
+async def cancel_order(
+    order_id: str,
+    request: Request,
+):
+    user_id = _get_user_id(request)
+
+    order = None
+    for o in _orders_db.values():
+        if o["id"] == order_id and o.get("user_id") == user_id:
+            order = o
+            break
+
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "ORDER_NOT_FOUND", "message": "Заказ не найден"},
+        )
+
+    if order["status"] not in CANCELABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CANCEL_NOT_ALLOWED",
+                "message": f"Отмена невозможна: заказ в статусе {order['status']}",
+                "current_status": order["status"],
+            },
+        )
+
+    unreserve_items = [
+        {"sku_id": item["sku_id"], "quantity": item["quantity"]}
+        for item in order["items"]
+    ]
+
+    try:
+        await _call_b2b_unreserve(order_id=order["id"], items=unreserve_items)
+        order["status"] = "CANCELLED"
+    except Exception:
+        order["status"] = "CANCEL_PENDING"
+
+    order["updated_at"] = datetime.now(timezone.utc).isoformat()
+    return order
